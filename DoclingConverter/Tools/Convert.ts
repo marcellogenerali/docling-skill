@@ -506,6 +506,64 @@ function doclingOutputToMarkdown(
   const texts = doclingOutput.texts || [];
   const tables = doclingOutput.tables || [];
   const pictures = doclingOutput.pictures || [];
+  const groups = (doclingOutput as any).groups || [];
+
+  // Build lookup maps
+  const textsMap = new Map<string, any>();
+  const groupsMap = new Map<string, any>();
+  for (const t of texts) textsMap.set(t.self_ref, t);
+  for (const g of groups) groupsMap.set(g.self_ref, g);
+
+  // Build set of refs that are inside tables (should not be rendered as standalone)
+  const refsInsideTables = new Set<string>();
+
+  function markDescendantsOfTable(ref: string) {
+    refsInsideTables.add(ref);
+    // Check texts
+    const text = textsMap.get(ref);
+    if (text?.children) {
+      for (const child of text.children) {
+        markDescendantsOfTable(child.$ref);
+      }
+    }
+    // Check groups
+    const group = groupsMap.get(ref);
+    if (group?.children) {
+      for (const child of group.children) {
+        markDescendantsOfTable(child.$ref);
+      }
+    }
+  }
+
+  // Mark all children of tables as inside-table
+  for (const table of tables) {
+    const tableAny = table as any;
+    if (tableAny.children) {
+      for (const child of tableAny.children) {
+        markDescendantsOfTable(child.$ref);
+      }
+    }
+  }
+
+  // Also mark texts/groups whose parent chain leads to a table
+  function isInsideTable(ref: string, visited = new Set<string>()): boolean {
+    if (visited.has(ref)) return false;
+    visited.add(ref);
+
+    if (ref.startsWith('#/tables/')) return true;
+    if (refsInsideTables.has(ref)) return true;
+
+    const elem = textsMap.get(ref) || groupsMap.get(ref);
+    if (!elem?.parent?.$ref) return false;
+
+    return isInsideTable(elem.parent.$ref, visited);
+  }
+
+  for (const t of texts) {
+    if (isInsideTable(t.self_ref)) {
+      refsInsideTables.add(t.self_ref);
+    }
+  }
 
   // Build map of parent ref -> tables that should appear after that element
   const tablesByParent = new Map<string, any[]>();
@@ -549,6 +607,20 @@ function doclingOutputToMarkdown(
   // Process all texts in order (they're already in document order)
   for (const element of texts) {
     const ref = element.self_ref;
+
+    // Skip texts that are inside tables (they're rendered via tableToMarkdown)
+    if (refsInsideTables.has(ref)) {
+      // But still check for tables/pictures that have this as parent
+      const childTables = tablesByParent.get(ref);
+      if (childTables) {
+        flushList();
+        for (const table of childTables) {
+          lines.push(tableToMarkdown(table));
+          lines.push('');
+        }
+      }
+      continue;
+    }
 
     switch (element.label) {
       case 'section_header':
