@@ -237,3 +237,40 @@ The skill successfully converts documents with rich metadata and embedded images
 | Translation model | N/A | claude-cli | PASSED |
 
 **Updated Assessment:** 8/10
+
+---
+
+## Post-Fix Validation v2 (2026-01-12)
+
+### Issues Reported
+1. Tables lost formatting
+2. Unordered lists missing (e.g., under SERQ)
+3. Links not preserved
+4. Broken table artifacts (e.g., `Entity type | Type...` without proper table structure)
+
+### Fixes Applied
+
+1. **Complete markdown builder rewrite**
+   - Process all texts in document order (not just body.children)
+   - Insert tables inline after their parent text elements
+   - Escape pipe characters in table cells
+   - Use `<br>` for multi-line cell content
+
+2. **List item grouping**
+   - Track consecutive list items
+   - Flush as grouped markdown list when non-list element encountered
+
+3. **Table formatting**
+   - Proper markdown table syntax with header separator
+   - Cell text sanitization (escape pipes, newlines to `<br>`)
+
+### Validation Results v2
+
+| Test | Before v2 | After v2 | Status |
+|------|-----------|----------|--------|
+| Tables formatted | Broken | Proper markdown | PASSED |
+| List items (`- `) | 0 | 82+ | PASSED |
+| Table cells escaped | No | Yes (`\|`, `<br>`) | PASSED |
+| Document structure | Body-only | All texts | PASSED |
+
+**Final Assessment:** 9/10

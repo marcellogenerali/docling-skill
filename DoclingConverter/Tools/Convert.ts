@@ -503,11 +503,56 @@ function doclingOutputToMarkdown(
   images: ProcessedImage[]
 ): string {
   const lines: string[] = [];
+  const texts = doclingOutput.texts || [];
+  const tables = doclingOutput.tables || [];
+  const pictures = doclingOutput.pictures || [];
 
-  // Process text elements
-  for (const element of doclingOutput.texts || []) {
+  // Build map of parent ref -> tables that should appear after that element
+  const tablesByParent = new Map<string, any[]>();
+  for (const table of tables) {
+    const parentRef = table.parent?.$ref || '';
+    if (parentRef) {
+      if (!tablesByParent.has(parentRef)) {
+        tablesByParent.set(parentRef, []);
+      }
+      tablesByParent.get(parentRef)!.push(table);
+    }
+  }
+
+  // Build map of parent ref -> pictures that should appear after that element
+  const picturesByParent = new Map<string, any[]>();
+  for (const picture of pictures) {
+    const parentRef = picture.parent?.$ref || '';
+    if (parentRef) {
+      if (!picturesByParent.has(parentRef)) {
+        picturesByParent.set(parentRef, []);
+      }
+      picturesByParent.get(parentRef)!.push(picture);
+    }
+  }
+
+  // Track list state for grouping
+  let currentListItems: string[] = [];
+  let lastWasList = false;
+
+  function flushList() {
+    if (currentListItems.length > 0) {
+      for (const item of currentListItems) {
+        lines.push(item);
+      }
+      lines.push('');
+      currentListItems = [];
+    }
+    lastWasList = false;
+  }
+
+  // Process all texts in order (they're already in document order)
+  for (const element of texts) {
+    const ref = element.self_ref;
+
     switch (element.label) {
       case 'section_header':
+        flushList();
         const level = element.level || 1;
         lines.push(`${'#'.repeat(Math.min(level, 6))} ${element.text || ''}`);
         lines.push('');
@@ -515,6 +560,7 @@ function doclingOutputToMarkdown(
 
       case 'paragraph':
       case 'text':
+        flushList();
         if (element.text) {
           lines.push(element.text);
           lines.push('');
@@ -523,10 +569,12 @@ function doclingOutputToMarkdown(
 
       case 'list_item':
         const marker = element.enumerated ? `${element.marker || '1.'}` : '-';
-        lines.push(`${marker} ${element.text || ''}`);
+        currentListItems.push(`${marker} ${element.text || ''}`);
+        lastWasList = true;
         break;
 
       case 'code':
+        flushList();
         const lang = element.code_language || '';
         lines.push(`\`\`\`${lang}`);
         lines.push(element.text || '');
@@ -535,27 +583,70 @@ function doclingOutputToMarkdown(
         break;
 
       default:
-        // Handle other text types
+        if (element.label !== 'list_item' && lastWasList) {
+          flushList();
+        }
         if (element.text) {
           lines.push(element.text);
           lines.push('');
         }
         break;
     }
+
+    // Insert any tables that have this text as parent
+    const childTables = tablesByParent.get(ref);
+    if (childTables) {
+      flushList();
+      for (const table of childTables) {
+        lines.push(tableToMarkdown(table));
+        lines.push('');
+      }
+    }
+
+    // Insert any pictures that have this text as parent
+    const childPictures = picturesByParent.get(ref);
+    if (childPictures) {
+      flushList();
+      for (const picture of childPictures) {
+        const idx = parseInt((picture.self_ref || '').split('/').pop() || '0') + 1;
+        const img = images.find(i => i.index === idx);
+        if (img) {
+          lines.push(`![Image ${img.index}](${img.dataUri})`);
+          lines.push('');
+          lines.push(`> **Image Description:** ${img.description}`);
+          lines.push('');
+        }
+      }
+    }
   }
 
-  // Add images at the end
+  // Flush any remaining list items
+  flushList();
+
+  // Add any images not already processed (fallback for orphan images)
+  const processedImageIndices = new Set<number>();
+  for (const line of lines) {
+    const match = line.match(/!\[Image (\d+)\]/);
+    if (match) {
+      processedImageIndices.add(parseInt(match[1]));
+    }
+  }
+
   for (const img of images) {
-    lines.push(`![Image ${img.index}](${img.dataUri})`);
-    lines.push('');
-    lines.push(`> **Image Description:** ${img.description}`);
-    lines.push('');
+    if (!processedImageIndices.has(img.index)) {
+      lines.push(`![Image ${img.index}](${img.dataUri})`);
+      lines.push('');
+      lines.push(`> **Image Description:** ${img.description}`);
+      lines.push('');
+    }
   }
 
-  // Handle tables
-  for (const table of doclingOutput.tables || []) {
-    lines.push(tableToMarkdown(table));
-    lines.push('');
+  // Add any tables without parent refs (orphan tables)
+  for (const table of tables) {
+    if (!table.parent?.$ref) {
+      lines.push(tableToMarkdown(table));
+      lines.push('');
+    }
   }
 
   return lines.join('\n');
@@ -571,7 +662,11 @@ function tableToMarkdown(table: any): string {
     const row = cell.start_row_offset_idx;
     const col = cell.start_col_offset_idx;
     if (row < num_rows && col < num_cols) {
-      grid[row][col] = cell.text || '';
+      // Escape pipe characters and replace newlines with <br> for multi-line cells
+      let cellText = (cell.text || '')
+        .replace(/\|/g, '\\|')
+        .replace(/\n/g, '<br>');
+      grid[row][col] = cellText;
     }
   }
 
