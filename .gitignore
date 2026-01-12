@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+bun.lock
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+dist/
+*.tgz
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Docling temporary files
+.docling-work/
