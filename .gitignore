@@ -28,3 +28,6 @@ dist/
 
 # Docling temporary files
 .docling-work/
+
+# Test output files (keep test input files)
+test-files/*.converted.md

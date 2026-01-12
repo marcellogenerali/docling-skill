@@ -42,7 +42,7 @@ import {
   describeImages,
   resetModelCache,
 } from '../Lib/DescriptionGenerator.ts';
-import { detectLanguage, translate, needsTranslation } from '../Lib/Translator.ts';
+import { detectLanguage, translate } from '../Lib/Translator.ts';
 import { buildMetadata, generateFrontmatter } from '../Lib/MetadataBuilder.ts';
 import type {
   ConversionOptions,
@@ -238,14 +238,14 @@ async function convertSingleFile(
     chunksTranslated: 0,
   };
 
-  if (needsTranslation(sourceLanguage)) {
-    console.log('  Translating to English...');
-    const translationStart = Date.now();
-    translationResult = await translate(rawMarkdown, sourceLanguage);
-    translatedMarkdown = translationResult.content;
-    const translationTime = Date.now() - translationStart;
-    console.log(`    Translation completed in ${translationTime}ms`);
-  }
+  // Always translate to handle mixed-language documents
+  // The LLM will preserve English text and only translate non-English portions
+  console.log('  Processing translation (handling mixed languages)...');
+  const translationStart = Date.now();
+  translationResult = await translate(rawMarkdown, sourceLanguage);
+  translatedMarkdown = translationResult.content;
+  const translationTime = Date.now() - translationStart;
+  console.log(`    Translation completed in ${translationTime}ms`);
 
   // ========== STEP 7: BUILD METADATA ==========
   console.log('  Building metadata...');
@@ -605,7 +605,29 @@ function assembleMarkdown(
 <!-- Processed: ${new Date().toISOString()} -->
 `;
 
-  return `${frontmatter}\n\n${content}${footer}`;
+  // Post-process content to fix common parsing issues
+  const cleanedContent = postProcessContent(content);
+
+  return `${frontmatter}\n\n${cleanedContent}${footer}`;
+}
+
+/**
+ * Post-process markdown content to fix common parsing artifacts
+ */
+function postProcessContent(content: string): string {
+  let result = content;
+
+  // Fix trademark/copyright symbols appearing on separate lines
+  // Pattern: newlines followed by symbol followed by newlines
+  result = result.replace(/\n+\s*([®™©])\s*\n+/g, '$1\n\n');
+
+  // Fix symbol at start of line that should attach to previous word
+  result = result.replace(/\n([®™©])\n/g, '$1\n');
+
+  // Fix dangling apostrophes (e.g., "Platform\n'\ns" -> "Platform's")
+  result = result.replace(/\n'\n/g, "'");
+
+  return result;
 }
 
 function generateOutputPath(inputPath: string): string {

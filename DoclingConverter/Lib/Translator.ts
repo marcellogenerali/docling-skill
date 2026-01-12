@@ -107,49 +107,51 @@ export function needsTranslation(sourceLanguage: string): boolean {
 /**
  * Translate content to English
  * Always runs translation to handle mixed-language documents
+ * Uses Anthropic SDK if API key available, otherwise falls back to Claude CLI
  */
 export async function translate(
   content: string,
   sourceLanguage: string
 ): Promise<TranslationResult> {
-  // Check API key
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.warn('Translation skipped: ANTHROPIC_API_KEY not set');
-    return {
-      content,
-      sourceLanguage,
-      targetLanguage: sourceLanguage,
-      translated: false,
-      model: null,
-      chunksTranslated: 0,
-    };
-  }
+  // Split into chunks for long documents
+  const chunks = splitIntoChunks(content);
+  const translatedChunks: string[] = [];
+
+  // Determine translation method
+  const useApiKey = !!process.env.ANTHROPIC_API_KEY;
+  const modelUsed = useApiKey ? HAIKU_MODEL : 'claude-cli';
 
   try {
-    // Split into chunks for long documents
-    const chunks = splitIntoChunks(content);
-    const translatedChunks: string[] = [];
+    if (useApiKey) {
+      // Use Anthropic SDK
+      const anthropic = new Anthropic();
 
-    const anthropic = new Anthropic();
+      for (const chunk of chunks) {
+        const response = await anthropic.messages.create({
+          model: HAIKU_MODEL,
+          max_tokens: 4096,
+          messages: [
+            {
+              role: 'user',
+              content: TRANSLATION_PROMPT.replace('{text}', chunk),
+            },
+          ],
+        });
 
-    for (const chunk of chunks) {
-      const response = await anthropic.messages.create({
-        model: HAIKU_MODEL,
-        max_tokens: 4096,
-        messages: [
-          {
-            role: 'user',
-            content: TRANSLATION_PROMPT.replace('{text}', chunk),
-          },
-        ],
-      });
+        const textBlock = response.content.find(block => block.type === 'text');
+        const translated = textBlock
+          ? (textBlock as { type: 'text'; text: string }).text
+          : chunk;
 
-      const textBlock = response.content.find(block => block.type === 'text');
-      const translated = textBlock
-        ? (textBlock as { type: 'text'; text: string }).text
-        : chunk;
-
-      translatedChunks.push(translated);
+        translatedChunks.push(translated);
+      }
+    } else {
+      // Fall back to Claude CLI
+      console.log('    Using Claude CLI for translation...');
+      for (const chunk of chunks) {
+        const translated = await translateWithClaudeCli(chunk);
+        translatedChunks.push(translated);
+      }
     }
 
     return {
@@ -157,7 +159,7 @@ export async function translate(
       sourceLanguage,
       targetLanguage: 'en',
       translated: true,
-      model: HAIKU_MODEL,
+      model: modelUsed,
       chunksTranslated: chunks.length,
     };
   } catch (error) {
@@ -170,6 +172,39 @@ export async function translate(
       model: null,
       chunksTranslated: 0,
     };
+  }
+}
+
+/**
+ * Translate a chunk using the Claude CLI
+ */
+async function translateWithClaudeCli(text: string): Promise<string> {
+  const { spawnSync } = await import('child_process');
+  const prompt = TRANSLATION_PROMPT.replace('{text}', text);
+
+  try {
+    // Use claude CLI with -p flag for non-interactive output
+    // Pass prompt via stdin to handle long text and special characters
+    const result = spawnSync('claude', ['-p'], {
+      input: prompt,
+      encoding: 'utf-8',
+      timeout: 120000, // 2 minute timeout per chunk
+      maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if (result.status !== 0) {
+      console.warn(`Claude CLI exited with code ${result.status}: ${result.stderr}`);
+      return text;
+    }
+
+    return result.stdout.trim();
+  } catch (error) {
+    console.warn('Claude CLI translation failed, returning original text:', error);
+    return text;
   }
 }
 
