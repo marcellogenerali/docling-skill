@@ -1,22 +1,51 @@
 # DoclingConverter
 
-A Claude Code skill for converting documents to AI-embedding-ready markdown using [Docling](https://github.com/docling-project/docling).
+A streamlined Claude Code skill for converting documents to markdown using [Docling](https://github.com/docling-project/docling). Pure Docling output with page-organized external images.
+
+## Design Philosophy
+
+This skill prioritizes simplicity and reliability:
+- ✅ Pure Docling conversion (no post-processing)
+- ✅ Predictable output (same input = same output)
+- ✅ Zero API costs (no LLM calls)
+- ✅ Fast processing (native Docling speed)
+- ✅ Scalable image organization (page-based folders for knowledge bases)
 
 ## Features
 
-- **Multi-format support**: PDF, DOCX, PPTX, XLSX, HTML, MD, images (PNG, JPG, TIFF), and audio (WAV, MP3, VTT)
-- **Compressed images**: Base64-embedded images with Sharp compression (max 1200px, 80% JPEG quality)
-- **AI-generated descriptions**: Image descriptions via Ollama InternVL3_5 or Claude Haiku fallback
-- **Automatic translation**: All non-English content translated to English while preserving technical terms
-- **Rich metadata**: YAML frontmatter with document identity, content metrics, and chunking hints
-- **Batch processing**: Convert entire directories with resume capability
+- **Multi-format support**: PDF, DOCX, XLSX, HTML, Markdown, images (PNG, JPG, TIFF)
+- **Page-organized images**: Images saved in page-based subdirectories for easy navigation
+- **Knowledge base ready**: Scales efficiently to hundreds of images
+- **Structure preservation**: Tables, lists, code blocks, hyperlinks, ASCII art
+- **Clean metadata**: YAML frontmatter with document metrics
+- **Pure Docling output**: No LLM processing, fast and predictable
+- **Local processing**: Zero API costs, all conversion happens locally
+
+## Image Organization
+
+Images are automatically organized by page number:
+
+```
+document-images/
+  page-001/
+    image-001.png
+    image-002.png
+  page-002/
+    image-003.png
+```
+
+This structure:
+- Makes it easy to find images by page
+- Scales efficiently to hundreds of images
+- Provides clear context for each image
+- Perfect for converting entire knowledge bases
 
 ## Prerequisites
 
 ### 1. Docling CLI (Required)
 
 ```bash
-pip3 install "docling>=2.67.0"
+pip install "docling>=2.67.0"
 ```
 
 Verify installation:
@@ -28,22 +57,6 @@ docling --version
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-```
-
-### 3. Ollama (Optional - for local image descriptions)
-
-```bash
-# Install Ollama
-brew install ollama
-
-# Pull the vision model
-ollama pull blaifu/internVL3_5:4B
-```
-
-### 4. Anthropic API Key (Optional - for translation and Haiku fallback)
-
-```bash
-export ANTHROPIC_API_KEY="your-key-here"
 ```
 
 ## Installation
@@ -96,8 +109,8 @@ cd DoclingConverter && bun install && cd ..
 
 ```
 Convert report.pdf to markdown
-Process all documents in /docs folder
-Convert presentation.pptx using OCR
+Convert document.docx to markdown
+Convert scanned.pdf using OCR
 ```
 
 ### Direct Tool Invocation
@@ -107,10 +120,10 @@ Convert presentation.pptx using OCR
 bun run ~/.claude/skills/DoclingConverter/Tools/Convert.ts document.pdf
 
 # With options
-bun run ~/.claude/skills/DoclingConverter/Tools/Convert.ts document.pdf --ocr --output ./output/
+bun run ~/.claude/skills/DoclingConverter/Tools/Convert.ts document.pdf --ocr
 
-# Batch processing
-bun run ~/.claude/skills/DoclingConverter/Tools/Convert.ts --batch ./documents/
+# Custom assets directory
+bun run ~/.claude/skills/DoclingConverter/Tools/Convert.ts document.pdf --assets-dir custom-images
 ```
 
 ### Options
@@ -118,40 +131,45 @@ bun run ~/.claude/skills/DoclingConverter/Tools/Convert.ts --batch ./documents/
 | Option | Description |
 |--------|-------------|
 | `--output, -o <path>` | Custom output path |
+| `--assets-dir <path>` | Custom assets directory (default: {name}-images/) |
 | `--ocr` | Force OCR processing for scanned documents |
 | `--vlm` | Use Vision Language Model pipeline |
-| `--lang <code>` | Source language hint (e.g., "de", "fr", "it") |
-| `--batch` | Process entire directory |
 | `--help, -h` | Show help |
 
 ## Output Format
 
-Converted files are saved with `.converted.md` extension and include:
+Converted files include YAML frontmatter with metadata:
 
 ```yaml
 ---
 title: "Document Title"
 source_file: "document.pdf"
-source_format: pdf
-converted_at: "2024-01-15T10:30:00Z"
-converter: docling
+source_format: "pdf"
+source_hash: "sha256:..."
+source_size_bytes: 12345
+converted_at: "2026-01-14T10:30:00Z"
+converter: "docling"
+converter_version: "2.67.0"
+skill_version: "5.0.0"
 page_count: 12
 word_count: 5420
-has_images: true
 image_count: 8
-has_tables: true
-table_count: 3
-translated_to: en
-# ... additional metadata
 ---
 
 # Document Content
 
-[Converted markdown content with embedded images]
+[Converted markdown content with page-organized external images]
 
----
-*Converted with DoclingConverter v2.0.0*
+Example image reference:
+![Image 1](./document-images/page-001/image-001.png)
 ```
+
+## Supported Formats
+
+- **Documents**: PDF, DOCX, XLSX
+- **Web**: HTML
+- **Markup**: Markdown
+- **Images**: PNG, JPG, JPEG, TIFF
 
 ## Project Structure
 
@@ -159,21 +177,15 @@ translated_to: en
 docling-skill/
 ├── DoclingConverter/           # Claude Code skill
 │   ├── SKILL.md               # Skill manifest
+│   ├── VERSION                # Current version
 │   ├── package.json           # Dependencies
-│   ├── tsconfig.json          # TypeScript config
 │   ├── Tools/
 │   │   └── Convert.ts         # Main conversion tool
-│   ├── Lib/
-│   │   ├── Types.ts           # TypeScript interfaces
-│   │   ├── DoclingClient.ts   # Docling CLI wrapper
-│   │   ├── ImageProcessor.ts  # Sharp image compression
-│   │   ├── DescriptionGenerator.ts  # AI image descriptions
-│   │   ├── Translator.ts      # LLM translation
-│   │   └── MetadataBuilder.ts # YAML frontmatter builder
-│   └── Workflows/
-│       ├── Convert.md         # Single file workflow
-│       └── BatchConvert.md    # Batch processing workflow
-├── PRD.md                     # Product requirements
+│   └── Lib/
+│       ├── Types.ts           # TypeScript interfaces
+│       ├── DoclingClient.ts   # Docling CLI wrapper
+│       ├── ImageProcessor.ts  # Image extraction/saving
+│       └── MetadataBuilder.ts # YAML frontmatter builder
 ├── install.sh                 # Installation script
 ├── .gitignore
 └── README.md
@@ -204,34 +216,22 @@ Ensure docling is in your PATH:
 # Check if docling is accessible
 which docling || echo "Not found"
 
-# If installed via pip3 but not in PATH, add to shell config:
+# If installed via pip but not in PATH, add to shell config:
 export PATH="$HOME/Library/Python/3.9/bin:$PATH"
 ```
 
-### "Sharp installation failed"
+### "Unsupported format"
 
-Sharp requires native dependencies:
-```bash
-# macOS
-xcode-select --install
+Check that your file format is supported (PDF, DOCX, XLSX, HTML, MD, PNG, JPG, TIFF).
 
-# Then reinstall
-cd ~/.claude/skills/DoclingConverter && bun install
-```
+## Version History
 
-### "Translation skipped: ANTHROPIC_API_KEY not set"
-
-Set your API key:
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-```
-
-### Images not described
-
-Either:
-1. Start Ollama: `ollama serve`
-2. Pull the model: `ollama pull blaifu/internVL3_5:4B`
-3. Or set ANTHROPIC_API_KEY for Claude Haiku fallback
+- **5.0.0** (Current) - Always use external images with page-based organization
+- **4.1.0** - Removed PowerPoint support, streamlined codebase
+- **4.0.0** - Added external images mode with `--external-images` flag
+- **3.0.0** - Simplified to pure Docling output, removed LLM processing
+- **2.0.0** - PRD for LLM-enhanced version (not fully implemented)
+- **1.x** - Initial prototypes
 
 ## License
 

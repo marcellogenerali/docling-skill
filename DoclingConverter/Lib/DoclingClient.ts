@@ -44,7 +44,7 @@ export async function findDoclingPath(): Promise<string | null> {
 
   for (const path of DOCLING_PATHS) {
     try {
-      await execa(path, ['--version'], { timeout: 5000 });
+      await execa(path, ['--version'], { timeout: 30000 });
       cachedDoclingPath = path;
       return path;
     } catch {
@@ -73,7 +73,7 @@ export async function getDoclingVersion(): Promise<string> {
   }
 
   try {
-    const { stdout, stderr } = await execa(doclingPath, ['--version'], { timeout: 10000 });
+    const { stdout, stderr } = await execa(doclingPath, ['--version'], { timeout: 30000 });
     // Parse version from output like "Docling version: 2.67.0"
     const output = stdout || stderr;
     const match = output.match(/Docling\s+version[:\s]+([\d.]+)/i);

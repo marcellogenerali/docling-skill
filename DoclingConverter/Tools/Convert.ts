@@ -1,31 +1,24 @@
 #!/usr/bin/env bun
 /**
- * Convert.ts - Document Conversion Tool
+ * Convert.ts - Document Conversion Tool with Page-Based Image Organization
  *
- * Converts documents to AI-embedding-ready markdown using Docling.
+ * Converts documents to markdown using Docling with external images organized by page.
+ * No LLM processing, no translation - pure docling output.
  *
  * Usage:
  *   bun run Convert.ts <file_path> [options]
  *
  * Options:
- *   --output, -o <path>   Custom output path (default: same directory)
+ *   --output, -o <path>   Custom output path
+ *   --assets-dir <path>   Custom assets directory (default: {name}-images/)
  *   --ocr                 Force OCR processing
  *   --vlm                 Use Vision Language Model pipeline
- *   --lang <code>         Source language hint (e.g., "de", "fr")
- *   --batch               Process directory of files
  *   --help, -h            Show help
- *
- * Examples:
- *   bun run Convert.ts document.pdf
- *   bun run Convert.ts report.pdf --output /output/report.md
- *   bun run Convert.ts scanned.pdf --ocr --lang de
- *   bun run Convert.ts --batch /docs/folder
  */
 
 import { parseArgs } from 'util';
-import { existsSync, writeFileSync, readdirSync, statSync, mkdirSync, readFileSync } from 'fs';
+import { existsSync, writeFileSync, statSync } from 'fs';
 import { resolve, dirname, basename, extname, join } from 'path';
-import { createHash } from 'crypto';
 
 import {
   convert as doclingConvert,
@@ -34,25 +27,13 @@ import {
   getFormat,
   isSupported,
   cleanupTempFiles,
-  DoclingError,
 } from '../Lib/DoclingClient.ts';
-import { processImagesFromDataUri } from '../Lib/ImageProcessor.ts';
-import {
-  selectImageModel,
-  describeImages,
-  resetModelCache,
-} from '../Lib/DescriptionGenerator.ts';
-import { detectLanguage, translate } from '../Lib/Translator.ts';
-import { buildMetadata, generateFrontmatter } from '../Lib/MetadataBuilder.ts';
+import { saveImagesExternal } from '../Lib/ImageProcessor.ts';
+import { generateFrontmatter } from '../Lib/MetadataBuilder.ts';
 import type {
   ConversionOptions,
-  ConversionResult,
   DoclingOutput,
-  ProcessedImage,
-  ImageContext,
-  BatchManifest,
-  BatchFileEntry,
-  SUPPORTED_FORMATS,
+  ExternalImage,
 } from '../Lib/Types.ts';
 
 // ============================================================================
@@ -60,31 +41,32 @@ import type {
 // ============================================================================
 
 const HELP_TEXT = `
-DoclingConverter - Convert documents to AI-embedding-ready markdown
+DoclingConverter - Convert documents to markdown with page-organized images
 
 USAGE:
   bun run Convert.ts <file_path> [options]
-  bun run Convert.ts --batch <directory> [options]
 
 OPTIONS:
-  --output, -o <path>   Custom output path (default: same directory as input)
+  --output, -o <path>   Custom output path (default: same directory)
+  --assets-dir <path>   Custom assets directory (default: {name}-images/)
   --ocr                 Force OCR processing for scanned documents
-  --vlm                 Use Vision Language Model pipeline for complex layouts
-  --lang <code>         Source language hint (ISO 639-1: en, de, fr, es, etc.)
-  --batch               Process all supported files in a directory
-  --resume              Resume interrupted batch job
+  --vlm                 Use Vision Language Model pipeline
   --help, -h            Show this help message
+
+IMAGE ORGANIZATION:
+  Images are automatically saved in page-based subdirectories:
+    doc-images/page-001/image-001.png
+    doc-images/page-001/image-002.png
+    doc-images/page-002/image-003.png
 
 EXAMPLES:
   bun run Convert.ts report.pdf
   bun run Convert.ts document.docx --output /output/doc.md
-  bun run Convert.ts scanned.pdf --ocr --lang de
-  bun run Convert.ts presentation.pptx --vlm
-  bun run Convert.ts --batch /docs/pdfs/
-  bun run Convert.ts --batch /docs/pdfs/ --resume
+  bun run Convert.ts scanned.pdf --ocr
+  bun run Convert.ts report.pdf --assets-dir custom-images
 
 SUPPORTED FORMATS:
-  PDF, DOCX, PPTX, XLSX, HTML, Markdown, Images (PNG, JPG, TIFF), Audio (WAV, MP3), VTT
+  PDF, DOCX, XLSX, HTML, Markdown, Images (PNG, JPG, TIFF)
 `;
 
 function main(): void {
@@ -92,11 +74,9 @@ function main(): void {
     args: Bun.argv.slice(2),
     options: {
       output: { type: 'string', short: 'o' },
+      'assets-dir': { type: 'string' },
       ocr: { type: 'boolean', default: false },
       vlm: { type: 'boolean', default: false },
-      lang: { type: 'string' },
-      batch: { type: 'boolean', default: false },
-      resume: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
     strict: true,
@@ -111,20 +91,18 @@ function main(): void {
   const inputPath = positionals[0];
 
   if (!inputPath) {
-    console.error('Error: No input file or directory specified');
+    console.error('Error: No input file specified');
     console.log('Use --help for usage information');
     process.exit(1);
   }
 
-  // Run async main
-  runConversion(inputPath, {
+  convertDocument(inputPath, {
     inputPath,
     outputPath: values.output,
+    assetsDir: values['assets-dir'],
     ocr: values.ocr,
     vlm: values.vlm,
-    sourceLanguage: values.lang,
-    batch: values.batch,
-  }, values.resume).catch(error => {
+  }).catch(error => {
     console.error(`Error: ${error.message}`);
     process.exit(1);
   });
@@ -134,34 +112,14 @@ function main(): void {
 // Main Conversion Logic
 // ============================================================================
 
-async function runConversion(
-  inputPath: string,
-  options: ConversionOptions,
-  resume: boolean = false
-): Promise<void> {
-  const startTime = Date.now();
-
-  // Handle batch mode
-  if (options.batch) {
-    await runBatchConversion(inputPath, options, resume);
-    return;
-  }
-
-  // Single file conversion
-  const result = await convertSingleFile(inputPath, options);
-
-  // Print result
-  printResult(result, Date.now() - startTime);
-}
-
-async function convertSingleFile(
+async function convertDocument(
   inputPath: string,
   options: ConversionOptions
-): Promise<ConversionResult> {
+): Promise<void> {
   const absolutePath = resolve(inputPath);
   const startTime = Date.now();
 
-  // ========== STEP 1: VALIDATE ==========
+  // Validate input
   if (!existsSync(absolutePath)) {
     throw new Error(`File not found: ${absolutePath}`);
   }
@@ -171,674 +129,295 @@ async function convertSingleFile(
     throw new Error(`Unsupported format: ${format}`);
   }
 
-  console.log(`\n  Converting: ${basename(absolutePath)}`);
+  console.log(`\nConverting: ${basename(absolutePath)}`);
 
-  // ========== STEP 2: DETECT MODELS ==========
-  console.log('  Detecting available models...');
-  const imageModelConfig = await selectImageModel();
-  console.log(`    Image model: ${imageModelConfig.model}`);
-
-  // ========== STEP 3: CONVERT WITH DOCLING ==========
-  console.log('  Running Docling conversion...');
-  const conversionStart = Date.now();
-
+  // Check docling
   const doclingInstalled = await checkDoclingInstalled();
   if (!doclingInstalled) {
     throw new Error('Docling CLI not installed. Run: pip install docling>=2.67.0');
   }
 
   const doclingVersion = await getDoclingVersion();
+
+  // Run docling conversion
+  console.log('  Running Docling...');
   const doclingOutput = await doclingConvert(absolutePath, options);
-  const conversionTime = Date.now() - conversionStart;
-  console.log(`    Docling completed in ${conversionTime}ms`);
 
-  // ========== STEP 4: EXTRACT & PROCESS IMAGES ==========
-  console.log('  Processing images...');
-  const imageStart = Date.now();
+  // Determine output path
+  const outputPath = options.outputPath || generateOutputPath(absolutePath);
+  const outputDir = dirname(outputPath);
+  const docName = basename(outputPath, '.md');
 
-  const imageDataUris = extractImageDataUris(doclingOutput);
-  console.log(`    Found ${imageDataUris.length} images`);
-  if (imageDataUris.length > 0) {
-    const firstUri = imageDataUris[0].uri;
-    console.log(`    First image URI starts with: ${firstUri.substring(0, 50)}...`);
+  // Save images as external files with page-based organization
+  const assetsDir = options.assetsDir || join(outputDir, `${docName}-images`);
+  console.log('  Saving images...');
+  const externalImages = saveImagesExternal(doclingOutput, assetsDir, outputPath);
+  const imageCount = externalImages.length;
+
+  if (imageCount > 0) {
+    console.log(`  Saved ${imageCount} images to ${basename(assetsDir)}/ (organized by page)`);
   }
-  const compressedImages = await processImagesFromDataUri(imageDataUris);
 
-  // Generate image contexts
-  const imageContexts = generateImageContexts(doclingOutput, compressedImages.length);
+  // Convert to markdown with external image paths
+  console.log('  Generating markdown...');
+  const markdown = doclingOutputToMarkdownExternal(doclingOutput, externalImages);
 
-  // Describe images
-  const processedImages = await describeImages(
-    compressedImages,
-    imageContexts,
-    imageModelConfig
-  );
-
-  const imageTime = Date.now() - imageStart;
-  const describedCount = processedImages.filter(img => img.descriptionGenerated).length;
-  console.log(`    Processed ${processedImages.length} images (${describedCount} described) in ${imageTime}ms`);
-
-  // Clean up temp files now that images are processed
-  cleanupTempFiles(doclingOutput);
-
-  // ========== STEP 5: DETECT LANGUAGE ==========
-  console.log('  Detecting language...');
-  const rawMarkdown = doclingOutputToMarkdown(doclingOutput, processedImages);
-  const sourceLanguage = await detectLanguage(rawMarkdown, options.sourceLanguage);
-  console.log(`    Detected: ${sourceLanguage}`);
-
-  // ========== STEP 6: TRANSLATE (if needed) ==========
-  let translatedMarkdown = rawMarkdown;
-  let translationResult = {
-    content: rawMarkdown,
-    sourceLanguage,
-    targetLanguage: 'en',
-    translated: false,
-    model: null as string | null,
-    chunksTranslated: 0,
-  };
-
-  // Always translate to handle mixed-language documents
-  // The LLM will preserve English text and only translate non-English portions
-  console.log('  Processing translation (handling mixed languages)...');
-  const translationStart = Date.now();
-  translationResult = await translate(rawMarkdown, sourceLanguage);
-  translatedMarkdown = translationResult.content;
-  const translationTime = Date.now() - translationStart;
-  console.log(`    Translation completed in ${translationTime}ms`);
-
-  // ========== STEP 7: BUILD METADATA ==========
-  console.log('  Building metadata...');
+  // Generate frontmatter
   const pipelineUsed = options.vlm ? 'vlm' : (options.ocr ? 'ocr' : 'standard');
-  const metadata = buildMetadata({
+  const frontmatter = generateFrontmatter({
     inputPath: absolutePath,
     doclingOutput,
     doclingVersion,
-    processedImages,
-    translationResult,
-    markdownContent: translatedMarkdown,
+    imageCount,
+    markdownContent: markdown,
     pipelineUsed,
-    ocrApplied: options.ocr || false,
-    imageDescriptionModel: imageModelConfig.model,
   });
 
-  // ========== STEP 8: ASSEMBLE MARKDOWN ==========
-  const frontmatter = generateFrontmatter(metadata);
-  const finalMarkdown = assembleMarkdown(frontmatter, translatedMarkdown, absolutePath);
+  // Assemble final output
+  const finalMarkdown = `${frontmatter}\n\n${markdown}`;
 
-  // ========== STEP 9: WRITE OUTPUT ==========
-  const outputPath = options.outputPath || generateOutputPath(absolutePath);
+  // Write output
   writeFileSync(outputPath, finalMarkdown, 'utf-8');
 
+  // Cleanup temp files
+  cleanupTempFiles(doclingOutput);
+
+  // Print result
   const totalTime = Date.now() - startTime;
   const outputStats = statSync(outputPath);
+  const outputSizeKb = Math.round(outputStats.size / 1024);
 
-  return {
-    success: true,
-    inputPath: absolutePath,
-    outputPath,
-    sourceFormat: format,
-    sourceLanguage,
-    targetLanguage: 'en',
-    pageCount: Object.keys(doclingOutput.pages || {}).length,
-    imageCount: processedImages.length,
-    imagesDescribed: describedCount,
-    imagesSkipped: processedImages.length - describedCount,
-    translated: translationResult.translated,
-    translationModel: translationResult.model,
-    imageDescriptionModel: imageModelConfig.model,
-    outputSizeBytes: outputStats.size,
-    compressionRatio: 0, // Calculate if needed
-    conversionTimeMs: conversionTime,
-    imageProcessingTimeMs: imageTime,
-    translationTimeMs: translationResult.translated ? totalTime - conversionTime - imageTime : 0,
-    totalTimeMs: totalTime,
-    metadata,
-  };
+  console.log(`
+Done!
+  Output: ${outputPath}
+  Size: ${outputSizeKb}KB
+  Images: ${imageCount}${imageCount > 0 ? ' (in page-organized directories)' : ''}
+  Time: ${totalTime}ms
+`);
 }
 
 // ============================================================================
-// Batch Processing
+// Markdown Generation - Recursive traversal following children order
 // ============================================================================
 
-async function runBatchConversion(
-  inputDir: string,
-  options: ConversionOptions,
-  resume: boolean
-): Promise<void> {
-  const absoluteDir = resolve(inputDir);
-
-  if (!existsSync(absoluteDir) || !statSync(absoluteDir).isDirectory()) {
-    throw new Error(`Directory not found: ${absoluteDir}`);
-  }
-
-  // Find or create manifest
-  const workDir = join(absoluteDir, '.docling-work');
-  const manifest = resume
-    ? await loadOrCreateManifest(workDir, absoluteDir)
-    : await createManifest(workDir, absoluteDir);
-
-  console.log(`\nBatch conversion: ${manifest.totalFiles} files`);
-
-  let completed = 0;
-  let failed = 0;
-
-  for (const file of manifest.files) {
-    if (file.status === 'completed') {
-      completed++;
-      continue;
-    }
-
-    const fileIndex = manifest.files.indexOf(file) + 1;
-    console.log(`\n[${fileIndex}/${manifest.totalFiles}] ${basename(file.path)}`);
-
-    try {
-      file.status = 'processing';
-      saveManifest(workDir, manifest);
-
-      const result = await convertSingleFile(file.path, {
-        ...options,
-        batch: false,
-      });
-
-      file.status = 'completed';
-      file.outputPath = result.outputPath;
-      file.processingTime = result.totalTimeMs;
-      completed++;
-    } catch (error) {
-      file.status = 'failed';
-      file.error = (error as Error).message;
-      failed++;
-      console.error(`  Error: ${file.error}`);
-    }
-
-    manifest.completedFiles = completed;
-    manifest.failedFiles = failed;
-    manifest.updatedAt = new Date().toISOString();
-    saveManifest(workDir, manifest);
-  }
-
-  // Print summary
-  console.log(`\n${'='.repeat(50)}`);
-  console.log(`Batch complete: ${completed} succeeded, ${failed} failed`);
-
-  if (failed === 0) {
-    // Clean up work directory on success
-    const { rmSync } = await import('fs');
-    rmSync(workDir, { recursive: true, force: true });
-  } else {
-    console.log(`Work directory preserved for resume: ${workDir}`);
-  }
-}
-
-async function createManifest(workDir: string, inputDir: string): Promise<BatchManifest> {
-  mkdirSync(workDir, { recursive: true });
-
-  const files = findSupportedFiles(inputDir);
-
-  const manifest: BatchManifest = {
-    jobId: createHash('md5').update(Date.now().toString()).digest('hex').substring(0, 8),
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    inputDirectory: inputDir,
-    totalFiles: files.length,
-    completedFiles: 0,
-    failedFiles: 0,
-    files: files.map(path => ({
-      path,
-      hash: createHash('md5').update(path).digest('hex').substring(0, 8),
-      status: 'pending' as const,
-    })),
-  };
-
-  saveManifest(workDir, manifest);
-  return manifest;
-}
-
-async function loadOrCreateManifest(workDir: string, inputDir: string): Promise<BatchManifest> {
-  const manifestPath = join(workDir, 'manifest.json');
-
-  if (existsSync(manifestPath)) {
-    const content = readFileSync(manifestPath, 'utf-8');
-    return JSON.parse(content) as BatchManifest;
-  }
-
-  return createManifest(workDir, inputDir);
-}
-
-function saveManifest(workDir: string, manifest: BatchManifest): void {
-  const manifestPath = join(workDir, 'manifest.json');
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
-}
-
-function findSupportedFiles(dir: string): string[] {
-  const files: string[] = [];
-  const entries = readdirSync(dir);
-
-  for (const entry of entries) {
-    if (entry.startsWith('.')) continue;
-
-    const fullPath = join(dir, entry);
-    const stat = statSync(fullPath);
-
-    if (stat.isFile() && isSupported(getFormat(fullPath))) {
-      files.push(fullPath);
-    }
-  }
-
-  return files.sort();
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-function extractImageDataUris(doclingOutput: DoclingOutput): { uri: string; size?: { width: number; height: number } }[] {
-  if (!doclingOutput.pictures) return [];
-
-  return doclingOutput.pictures
-    .filter(pic => pic.image?.uri)
-    .map(pic => ({
-      uri: pic.image!.uri,
-      size: pic.image!.size,
-    }));
-}
-
-function generateImageContexts(
+/**
+ * Convert docling output to markdown with external image files
+ */
+function doclingOutputToMarkdownExternal(
   doclingOutput: DoclingOutput,
-  imageCount: number
-): ImageContext[] {
-  const title = doclingOutput.origin?.filename || 'Document';
-  const contexts: ImageContext[] = [];
-
-  for (let i = 0; i < imageCount; i++) {
-    const picture = doclingOutput.pictures?.[i];
-    const pageNo = picture?.prov?.[0]?.page_no || 1;
-
-    // Find surrounding text elements
-    const surroundingText = findSurroundingText(doclingOutput, picture);
-    const headingPath = findHeadingPath(doclingOutput, picture);
-
-    contexts.push({
-      documentTitle: title.replace(/\.[^/.]+$/, ''),
-      headingPath,
-      surroundingText,
-      pageNumber: pageNo,
-    });
-  }
-
-  return contexts;
-}
-
-function findSurroundingText(doclingOutput: DoclingOutput, _picture: unknown): string {
-  if (!doclingOutput.texts) return '';
-
-  // Get text from first few elements
-  const texts: string[] = [];
-  for (const element of doclingOutput.texts.slice(0, 5)) {
-    if (element.text) {
-      texts.push(element.text);
-    }
-  }
-
-  return texts.join(' ').substring(0, 300);
-}
-
-function findHeadingPath(doclingOutput: DoclingOutput, _picture: unknown): string[] {
-  if (!doclingOutput.texts) return [];
-
-  const headings: string[] = [];
-  for (const element of doclingOutput.texts) {
-    if (element.label === 'section_header' && element.text) {
-      headings.push(element.text);
-      if (headings.length >= 3) break;
-    }
-  }
-
-  return headings;
-}
-
-function doclingOutputToMarkdown(
-  doclingOutput: DoclingOutput,
-  images: ProcessedImage[]
+  images: ExternalImage[]
 ): string {
   const lines: string[] = [];
   const texts = doclingOutput.texts || [];
   const tables = doclingOutput.tables || [];
   const pictures = doclingOutput.pictures || [];
   const groups = (doclingOutput as any).groups || [];
+  const body = doclingOutput.body;
 
-  // Build lookup maps
-  const textsMap = new Map<string, any>();
-  const groupsMap = new Map<string, any>();
-  for (const t of texts) textsMap.set(t.self_ref, t);
-  for (const g of groups) groupsMap.set(g.self_ref, g);
+  const elementsMap = new Map<string, any>();
+  for (const t of texts) elementsMap.set(t.self_ref, { ...t, type: 'text' });
+  for (const t of tables) elementsMap.set(t.self_ref, { ...t, type: 'table' });
+  for (const p of pictures) elementsMap.set(p.self_ref, { ...p, type: 'picture' });
+  for (const g of groups) elementsMap.set(g.self_ref, { ...g, type: 'group' });
 
-  // Build set of refs that are inside tables (should not be rendered as standalone)
-  const refsInsideTables = new Set<string>();
-
-  function markDescendantsOfTable(ref: string) {
-    refsInsideTables.add(ref);
-    // Check texts
-    const text = textsMap.get(ref);
-    if (text?.children) {
-      for (const child of text.children) {
-        markDescendantsOfTable(child.$ref);
-      }
-    }
-    // Check groups
-    const group = groupsMap.get(ref);
-    if (group?.children) {
-      for (const child of group.children) {
-        markDescendantsOfTable(child.$ref);
-      }
-    }
-  }
-
-  // Mark all children of tables as inside-table
-  for (const table of tables) {
-    const tableAny = table as any;
-    if (tableAny.children) {
-      for (const child of tableAny.children) {
-        markDescendantsOfTable(child.$ref);
-      }
-    }
-  }
-
-  // Also mark texts/groups whose parent chain leads to a table
-  function isInsideTable(ref: string, visited = new Set<string>()): boolean {
-    if (visited.has(ref)) return false;
-    visited.add(ref);
-
-    if (ref.startsWith('#/tables/')) return true;
-    if (refsInsideTables.has(ref)) return true;
-
-    const elem = textsMap.get(ref) || groupsMap.get(ref);
-    if (!elem?.parent?.$ref) return false;
-
-    return isInsideTable(elem.parent.$ref, visited);
-  }
-
-  for (const t of texts) {
-    if (isInsideTable(t.self_ref)) {
-      refsInsideTables.add(t.self_ref);
-    }
-  }
-
-  // Build map of parent ref -> tables that should appear after that element
-  const tablesByParent = new Map<string, any[]>();
-  for (const table of tables) {
-    const parentRef = table.parent?.$ref || '';
-    if (parentRef) {
-      if (!tablesByParent.has(parentRef)) {
-        tablesByParent.set(parentRef, []);
-      }
-      tablesByParent.get(parentRef)!.push(table);
-    }
-  }
-
-  // Build map of parent ref -> pictures that should appear after that element
-  const picturesByParent = new Map<string, any[]>();
-  for (const picture of pictures) {
-    const parentRef = picture.parent?.$ref || '';
-    if (parentRef) {
-      if (!picturesByParent.has(parentRef)) {
-        picturesByParent.set(parentRef, []);
-      }
-      picturesByParent.get(parentRef)!.push(picture);
-    }
-  }
-
-  // Track list state for grouping
+  const rendered = new Set<string>();
   let currentListItems: string[] = [];
-  let lastWasList = false;
+  let asciiArtBuffer: string[] = [];
+  const BOX_DRAWING_CHARS = /[┌┐└┘─│├┤┬┴┼▼▲►◄→←↓↑╔╗╚╝═║╠╣╦╩╬]/;
+
+  function isAsciiArt(text: string): boolean {
+    return BOX_DRAWING_CHARS.test(text);
+  }
+
+  function flushAsciiArt() {
+    if (asciiArtBuffer.length > 0) {
+      lines.push('```');
+      for (const line of asciiArtBuffer) lines.push(line);
+      lines.push('```');
+      lines.push('');
+      asciiArtBuffer = [];
+    }
+  }
 
   function flushList() {
     if (currentListItems.length > 0) {
-      for (const item of currentListItems) {
-        lines.push(item);
-      }
+      flushAsciiArt();
+      for (const item of currentListItems) lines.push(item);
       lines.push('');
       currentListItems = [];
     }
-    lastWasList = false;
   }
 
-  // Process all texts in order (they're already in document order)
-  for (const element of texts) {
-    const ref = element.self_ref;
-
-    // Skip texts that are inside tables (they're rendered via tableToMarkdown)
-    if (refsInsideTables.has(ref)) {
-      // But still check for tables/pictures that have this as parent
-      const childTables = tablesByParent.get(ref);
-      if (childTables) {
-        flushList();
-        for (const table of childTables) {
-          lines.push(tableToMarkdown(table));
-          lines.push('');
-        }
-      }
-      continue;
+  function formatTextWithLink(element: any): string {
+    let text = element.text || '';
+    if (element.hyperlink && element.hyperlink !== '.') {
+      text = `[${text}](${element.hyperlink})`;
     }
+    return text;
+  }
 
-    switch (element.label) {
-      case 'section_header':
-        flushList();
-        const level = element.level || 1;
-        lines.push(`${'#'.repeat(Math.min(level, 6))} ${element.text || ''}`);
-        lines.push('');
-        break;
-
-      case 'paragraph':
-      case 'text':
-        flushList();
-        if (element.text) {
-          lines.push(element.text);
-          lines.push('');
+  function getInlineGroupText(group: any): string {
+    if (!group.children) return '';
+    const parts: string[] = [];
+    for (const childRef of group.children) {
+      const child = elementsMap.get(childRef.$ref);
+      if (child?.text) {
+        let text = child.text;
+        if (child.hyperlink && child.hyperlink !== '.') {
+          text = `[${text}](${child.hyperlink})`;
         }
-        break;
+        parts.push(text);
+      }
+    }
+    return parts.join('');
+  }
 
-      case 'list_item':
-        const marker = element.enumerated ? `${element.marker || '1.'}` : '-';
-        currentListItems.push(`${marker} ${element.text || ''}`);
-        lastWasList = true;
-        break;
+  function renderTable(table: any): string {
+    if (!table.data?.table_cells) return '';
+    const { num_rows, num_cols, table_cells } = table.data;
+    const grid: string[][] = Array(num_rows).fill(null).map(() => Array(num_cols).fill(''));
+    for (const cell of table_cells) {
+      const row = cell.start_row_offset_idx;
+      const col = cell.start_col_offset_idx;
+      if (row < num_rows && col < num_cols) {
+        grid[row][col] = (cell.text || '').replace(/\|/g, '\\|').replace(/\n/g, '<br>');
+      }
+    }
+    const tableLines: string[] = [];
+    if (grid.length > 0) {
+      tableLines.push('| ' + grid[0].join(' | ') + ' |');
+      tableLines.push('| ' + grid[0].map(() => '---').join(' | ') + ' |');
+      for (let i = 1; i < grid.length; i++) {
+        tableLines.push('| ' + grid[i].join(' | ') + ' |');
+      }
+    }
+    return tableLines.join('\n');
+  }
 
-      case 'code':
-        flushList();
-        const lang = element.code_language || '';
-        lines.push(`\`\`\`${lang}`);
-        lines.push(element.text || '');
-        lines.push('```');
-        lines.push('');
-        break;
+  function markDescendantsRendered(element: any) {
+    if (!element.children) return;
+    for (const childRef of element.children) {
+      const ref = childRef.$ref;
+      rendered.add(ref);
+      const child = elementsMap.get(ref);
+      if (child) markDescendantsRendered(child);
+    }
+  }
 
-      default:
-        if (element.label !== 'list_item' && lastWasList) {
+  // Render image with external file path
+  function renderImage(picture: any) {
+    const idx = parseInt((picture.self_ref || '').split('/').pop() || '0');
+    const img = images.find(i => i.index === idx + 1);
+    if (img) {
+      lines.push(`![Image ${img.index}](${img.relativePath})`);
+      lines.push('');
+    }
+  }
+
+  function renderElement(ref: string) {
+    if (rendered.has(ref)) return;
+    rendered.add(ref);
+    const element = elementsMap.get(ref);
+    if (!element) return;
+    const type = element.type;
+
+    if (type === 'text') {
+      switch (element.label) {
+        case 'section_header':
           flushList();
-        }
-        if (element.text) {
-          lines.push(element.text);
+          flushAsciiArt();
+          const level = element.level || 1;
+          lines.push(`${'#'.repeat(Math.min(level, 6))} ${formatTextWithLink(element)}`);
           lines.push('');
-        }
-        break;
-    }
-
-    // Insert any tables that have this text as parent
-    const childTables = tablesByParent.get(ref);
-    if (childTables) {
-      flushList();
-      for (const table of childTables) {
-        lines.push(tableToMarkdown(table));
-        lines.push('');
+          break;
+        case 'paragraph':
+        case 'text':
+          flushList();
+          if (element.text) {
+            if (isAsciiArt(element.text)) {
+              asciiArtBuffer.push(element.text);
+            } else {
+              flushAsciiArt();
+              lines.push(formatTextWithLink(element));
+              lines.push('');
+            }
+          }
+          break;
+        case 'list_item':
+          const marker = element.enumerated ? `${element.marker || '1.'}` : '-';
+          const listItemText = formatTextWithLink(element);
+          if (listItemText.trim()) currentListItems.push(`${marker} ${listItemText}`);
+          break;
+        case 'code':
+          flushList();
+          flushAsciiArt();
+          const lang = element.code_language || '';
+          lines.push(`\`\`\`${lang}`);
+          lines.push(element.text || '');
+          lines.push('```');
+          lines.push('');
+          break;
+        default:
+          if (element.text) {
+            flushList();
+            flushAsciiArt();
+            lines.push(formatTextWithLink(element));
+            lines.push('');
+          }
+          break;
       }
-    }
-
-    // Insert any pictures that have this text as parent
-    const childPictures = picturesByParent.get(ref);
-    if (childPictures) {
+      if (element.children) {
+        for (const childRef of element.children) renderElement(childRef.$ref);
+      }
+    } else if (type === 'table') {
       flushList();
-      for (const picture of childPictures) {
-        const idx = parseInt((picture.self_ref || '').split('/').pop() || '0') + 1;
-        const img = images.find(i => i.index === idx);
-        if (img) {
-          lines.push(`![Image ${img.index}](${img.dataUri})`);
+      flushAsciiArt();
+      lines.push(renderTable(element));
+      lines.push('');
+      markDescendantsRendered(element);
+    } else if (type === 'picture') {
+      flushList();
+      flushAsciiArt();
+      renderImage(element);
+    } else if (type === 'group') {
+      if (element.label === 'inline') {
+        flushList();
+        flushAsciiArt();
+        const groupText = getInlineGroupText(element);
+        if (groupText) {
+          lines.push(groupText);
           lines.push('');
-          lines.push(`> **Image Description:** ${img.description}`);
-          lines.push('');
+        }
+        if (element.children) {
+          for (const childRef of element.children) rendered.add(childRef.$ref);
+        }
+      } else {
+        if (element.children) {
+          for (const childRef of element.children) renderElement(childRef.$ref);
         }
       }
     }
   }
 
-  // Flush any remaining list items
+  if (body?.children) {
+    for (const childRef of body.children) renderElement(childRef.$ref);
+  }
   flushList();
+  flushAsciiArt();
 
-  // Add any images not already processed (fallback for orphan images)
-  const processedImageIndices = new Set<number>();
-  for (const line of lines) {
-    const match = line.match(/!\[Image (\d+)\]/);
-    if (match) {
-      processedImageIndices.add(parseInt(match[1]));
-    }
+  for (const element of [...texts, ...tables, ...pictures]) {
+    if (!rendered.has(element.self_ref)) renderElement(element.self_ref);
   }
-
-  for (const img of images) {
-    if (!processedImageIndices.has(img.index)) {
-      lines.push(`![Image ${img.index}](${img.dataUri})`);
-      lines.push('');
-      lines.push(`> **Image Description:** ${img.description}`);
-      lines.push('');
-    }
-  }
-
-  // Add any tables without parent refs (orphan tables)
-  for (const table of tables) {
-    if (!table.parent?.$ref) {
-      lines.push(tableToMarkdown(table));
-      lines.push('');
-    }
-  }
+  flushList();
+  flushAsciiArt();
 
   return lines.join('\n');
-}
-
-function tableToMarkdown(table: any): string {
-  if (!table.data?.table_cells) return '';
-
-  const { num_rows, num_cols, table_cells } = table.data;
-  const grid: string[][] = Array(num_rows).fill(null).map(() => Array(num_cols).fill(''));
-
-  for (const cell of table_cells) {
-    const row = cell.start_row_offset_idx;
-    const col = cell.start_col_offset_idx;
-    if (row < num_rows && col < num_cols) {
-      // Escape pipe characters and replace newlines with <br> for multi-line cells
-      let cellText = (cell.text || '')
-        .replace(/\|/g, '\\|')
-        .replace(/\n/g, '<br>');
-      grid[row][col] = cellText;
-    }
-  }
-
-  const lines: string[] = [];
-
-  // Header row
-  if (grid.length > 0) {
-    lines.push('| ' + grid[0].join(' | ') + ' |');
-    lines.push('| ' + grid[0].map(() => '---').join(' | ') + ' |');
-
-    // Data rows
-    for (let i = 1; i < grid.length; i++) {
-      lines.push('| ' + grid[i].join(' | ') + ' |');
-    }
-  }
-
-  return lines.join('\n');
-}
-
-function assembleMarkdown(
-  frontmatter: string,
-  content: string,
-  inputPath: string
-): string {
-  const footer = `
----
-
-<!-- CONVERSION FOOTER -->
-<!-- Converted by DoclingConverter v2.0.0 -->
-<!-- Source: ${inputPath} -->
-<!-- Processed: ${new Date().toISOString()} -->
-`;
-
-  // Post-process content to fix common parsing issues
-  const cleanedContent = postProcessContent(content);
-
-  return `${frontmatter}\n\n${cleanedContent}${footer}`;
-}
-
-/**
- * Post-process markdown content to fix common parsing artifacts
- */
-function postProcessContent(content: string): string {
-  let result = content;
-
-  // Fix trademark/copyright symbols appearing on separate lines
-  // Pattern: newlines followed by symbol followed by newlines
-  result = result.replace(/\n+\s*([®™©])\s*\n+/g, '$1\n\n');
-
-  // Fix symbol at start of line that should attach to previous word
-  result = result.replace(/\n([®™©])\n/g, '$1\n');
-
-  // Fix dangling apostrophes (e.g., "Platform\n'\ns" -> "Platform's")
-  result = result.replace(/\n'\n/g, "'");
-
-  return result;
 }
 
 function generateOutputPath(inputPath: string): string {
   const dir = dirname(inputPath);
   const name = basename(inputPath, extname(inputPath));
-  return join(dir, `${name}.converted.md`);
-}
-
-// ============================================================================
-// Output Formatting
-// ============================================================================
-
-function printResult(result: ConversionResult, totalMs: number): void {
-  const outputSizeKb = Math.round(result.outputSizeBytes / 1024);
-
-  console.log(`
-${'='.repeat(50)}
-SUMMARY: Converted ${basename(result.inputPath)} to embedding-ready markdown
-
-ANALYSIS:
-  - Format: ${result.sourceFormat}
-  - Pages: ${result.pageCount}
-  - Images: ${result.imageCount} (${result.imagesDescribed} described)
-  - Language: ${result.sourceLanguage}${result.translated ? ' -> en' : ''}
-  - Image model: ${result.imageDescriptionModel}
-
-ACTIONS:
-  - Docling conversion: ${result.conversionTimeMs}ms
-  - Image processing: ${result.imageProcessingTimeMs}ms
-  - Translation: ${result.translationTimeMs}ms
-  - Total: ${totalMs}ms
-
-RESULTS:
-  - Output: ${result.outputPath}
-  - Size: ${outputSizeKb}KB
-
-NEXT:
-  1. Review converted document
-  2. Verify image descriptions
-  3. Process with chunking pipeline
-
-romeo: Document converted, ${result.imageCount} images processed.
-${'='.repeat(50)}
-`);
+  return join(dir, `${name}.md`);
 }
 
 // ============================================================================
@@ -849,5 +428,4 @@ if (import.meta.main) {
   main();
 }
 
-// Export for programmatic use
-export { convertSingleFile, runBatchConversion };
+export { convertDocument };

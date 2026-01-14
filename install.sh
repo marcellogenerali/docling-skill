@@ -4,7 +4,6 @@
 #
 # Usage:
 #   ./install.sh          # Install for current user
-#   ./install.sh --local  # Install dependencies only (session-only)
 #   ./install.sh --force  # Force install even if same version
 #
 
@@ -26,11 +25,9 @@ NC='\033[0m' # No Color
 
 # Parse arguments
 FORCE_INSTALL=false
-LOCAL_ONLY=false
 for arg in "$@"; do
     case $arg in
         --force) FORCE_INSTALL=true ;;
-        --local) LOCAL_ONLY=true ;;
     esac
 done
 
@@ -63,6 +60,13 @@ if ! command -v bun &> /dev/null; then
 fi
 echo -e "  ${GREEN}✓${NC} Bun $(bun --version)"
 
+# Check Python3
+if ! command -v python3 &> /dev/null; then
+    echo -e "${RED}Error: Python 3 is not installed${NC}"
+    exit 1
+fi
+echo -e "  ${GREEN}✓${NC} Python $(python3 --version | cut -d' ' -f2)"
+
 # Check Docling
 DOCLING_PATH=""
 for path in "docling" "$HOME/Library/Python/3.9/bin/docling" "$HOME/Library/Python/3.10/bin/docling" "$HOME/Library/Python/3.11/bin/docling" "$HOME/Library/Python/3.12/bin/docling" "$HOME/.local/bin/docling" "/usr/local/bin/docling"; do
@@ -88,34 +92,7 @@ else
     echo -e "  ${GREEN}✓${NC} Docling $DOCLING_VERSION"
 fi
 
-# Check optional: Ollama
-if command -v ollama &> /dev/null; then
-    echo -e "  ${GREEN}✓${NC} Ollama installed (optional)"
-else
-    echo -e "  ${YELLOW}○${NC} Ollama not installed (optional - for local image descriptions)"
-fi
-
-# Check optional: ANTHROPIC_API_KEY
-if [ -n "$ANTHROPIC_API_KEY" ]; then
-    echo -e "  ${GREEN}✓${NC} ANTHROPIC_API_KEY set (optional)"
-else
-    echo -e "  ${YELLOW}○${NC} ANTHROPIC_API_KEY not set (optional - for translation)"
-fi
-
 echo ""
-
-# Handle --local flag
-if [ "$LOCAL_ONLY" = true ]; then
-    echo -e "${YELLOW}Installing dependencies only (session-only mode)...${NC}"
-    cd "$SKILL_SOURCE"
-    bun install
-    echo ""
-    echo -e "${GREEN}Done!${NC} Use the skill directly:"
-    echo ""
-    echo "  bun run $SKILL_SOURCE/Tools/Convert.ts <file>"
-    echo ""
-    exit 0
-fi
 
 # Create skills directory
 mkdir -p "$SKILLS_DIR"
