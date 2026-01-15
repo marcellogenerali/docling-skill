@@ -1,6 +1,6 @@
 {
-  "name": "docling-converter",
-  "version": "4.1.0",
+  "name": "doctomd",
+  "version": "5.0.0",
   "type": "module",
   "dependencies": {
     "execa": "^9.0.0"

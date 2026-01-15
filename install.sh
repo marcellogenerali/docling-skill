@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# DoclingConverter Skill Installation Script
+# docTOmd Skill Installation Script
 #
 # Usage:
 #   ./install.sh          # Install for current user
@@ -9,7 +9,7 @@
 
 set -e
 
-SKILL_NAME="DoclingConverter"
+SKILL_NAME="docTOmd"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_SOURCE="$SCRIPT_DIR/$SKILL_NAME"
 SKILLS_DIR="$HOME/.claude/skills"
@@ -31,7 +31,7 @@ for arg in "$@"; do
     esac
 done
 
-echo -e "${BLUE}DoclingConverter Skill Installer${NC}"
+echo -e "${BLUE}docTOmd Skill Installer${NC}"
 echo "=================================="
 echo ""
 
@@ -69,7 +69,7 @@ echo -e "  ${GREEN}✓${NC} Python $(python3 --version | cut -d' ' -f2)"
 
 # Check Docling
 DOCLING_PATH=""
-for path in "docling" "$HOME/Library/Python/3.9/bin/docling" "$HOME/Library/Python/3.10/bin/docling" "$HOME/Library/Python/3.11/bin/docling" "$HOME/Library/Python/3.12/bin/docling" "$HOME/.local/bin/docling" "/usr/local/bin/docling"; do
+for path in "docling" "$HOME/Library/Python/3.9/bin/doctomd" "$HOME/Library/Python/3.10/bin/doctomd" "$HOME/Library/Python/3.11/bin/doctomd" "$HOME/Library/Python/3.12/bin/doctomd" "$HOME/.local/bin/doctomd" "/usr/local/bin/doctomd"; do
     if command -v "$path" &> /dev/null 2>&1 || [ -x "$path" ]; then
         DOCLING_PATH="$path"
         break
@@ -166,8 +166,8 @@ echo ""
 echo -e "${GREEN}Installation complete!${NC} Version ${CYAN}$SOURCE_VERSION${NC} installed."
 echo ""
 echo "Usage:"
-echo "  - Slash command: /docling"
+echo "  - Slash command: /doctomd"
 echo "  - Natural language: \"Convert document.pdf to markdown\""
-echo "  - Direct: bun run ~/.claude/skills/DoclingConverter/Tools/Convert.ts <file>"
+echo "  - Direct: bun run ~/.claude/skills/docTOmd/Tools/Convert.ts <file>"
 echo ""
 echo "For more information, see: $SCRIPT_DIR/README.md"

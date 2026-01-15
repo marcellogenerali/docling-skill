@@ -1,4 +1,4 @@
-# DoclingConverter
+# docTOmd
 
 A streamlined Claude Code skill for converting documents to markdown using [Docling](https://github.com/docling-project/docling). Pure Docling output with page-organized external images.
 
@@ -64,7 +64,7 @@ curl -fsSL https://bun.sh/install | bash
 ### Quick Install (User-level)
 
 ```bash
-git clone https://github.com/yourusername/docling-skill.git
+git clone https://github.com/yourusername/doctomd-skill.git
 cd docling-skill
 ./install.sh
 ```
@@ -73,15 +73,15 @@ cd docling-skill
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/docling-skill.git
+git clone https://github.com/yourusername/doctomd-skill.git
 cd docling-skill
 
 # Copy to Claude Code skills directory
 mkdir -p ~/.claude/skills
-cp -r DoclingConverter ~/.claude/skills/
+cp -r docTOmd ~/.claude/skills/
 
 # Install dependencies
-cd ~/.claude/skills/DoclingConverter
+cd ~/.claude/skills/docTOmd
 bun install
 ```
 
@@ -91,10 +91,10 @@ For testing without permanent installation:
 
 ```bash
 # From the repository root
-cd DoclingConverter && bun install && cd ..
+cd docTOmd && bun install && cd ..
 
 # Then reference directly in prompts:
-# "Use bun run /path/to/docling-skill/DoclingConverter/Tools/Convert.ts"
+# "Use bun run /path/to/doctomd-skill/docTOmd/Tools/Convert.ts"
 ```
 
 ## Usage
@@ -102,7 +102,7 @@ cd DoclingConverter && bun install && cd ..
 ### Slash Command
 
 ```
-/docling report.pdf
+/doctomd report.pdf
 ```
 
 ### Natural Language
@@ -117,13 +117,13 @@ Convert scanned.pdf using OCR
 
 ```bash
 # Basic conversion
-bun run ~/.claude/skills/DoclingConverter/Tools/Convert.ts document.pdf
+bun run ~/.claude/skills/docTOmd/Tools/Convert.ts document.pdf
 
 # With options
-bun run ~/.claude/skills/DoclingConverter/Tools/Convert.ts document.pdf --ocr
+bun run ~/.claude/skills/docTOmd/Tools/Convert.ts document.pdf --ocr
 
 # Custom assets directory
-bun run ~/.claude/skills/DoclingConverter/Tools/Convert.ts document.pdf --assets-dir custom-images
+bun run ~/.claude/skills/docTOmd/Tools/Convert.ts document.pdf --assets-dir custom-images
 ```
 
 ### Options
@@ -175,7 +175,7 @@ Example image reference:
 
 ```
 docling-skill/
-├── DoclingConverter/           # Claude Code skill
+├── docTOmd/           # Claude Code skill
 │   ├── SKILL.md               # Skill manifest
 │   ├── VERSION                # Current version
 │   ├── package.json           # Dependencies
@@ -196,16 +196,16 @@ docling-skill/
 ### Running Tests
 
 ```bash
-cd DoclingConverter
+cd docTOmd
 bun run Tools/Convert.ts --help
 bun run Tools/Convert.ts /path/to/test.pdf
 ```
 
 ### Modifying the Skill
 
-1. Edit files in `DoclingConverter/`
+1. Edit files in `docTOmd/`
 2. Test locally with direct bun invocation
-3. Copy updated skill to `~/.claude/skills/DoclingConverter/`
+3. Copy updated skill to `~/.claude/skills/docTOmd/`
 
 ## Troubleshooting
 

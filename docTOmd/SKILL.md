@@ -1,12 +1,12 @@
 ---
-name: DoclingConverter
-description: Convert documents to markdown with Docling. USE WHEN user mentions convert document OR docling OR PDF to markdown OR extract text from PDF OR DOCX OR /docling.
-invocation: /docling
+name: docTOmd
+description: Convert documents to markdown. USE WHEN user mentions convert to markdown OR to md OR PDF to markdown OR doc to md OR docx to markdown OR document to md OR extract text from PDF OR convert PDF OR convert document OR make markdown from OR /doctomd.
+invocation: /doctomd
 ---
 
-# DoclingConverter
+# docTOmd
 
-Streamlined document conversion using [Docling](https://github.com/docling-project/docling). Converts PDF, DOCX, XLSX, HTML, and images into markdown with page-organized external images.
+Streamlined document-to-markdown conversion using [Docling](https://github.com/docling-project/docling). Converts PDF, DOCX, XLSX, HTML, and images into markdown with page-organized external images.
 
 ## Features
 
@@ -19,7 +19,7 @@ Streamlined document conversion using [Docling](https://github.com/docling-proje
 ## Usage
 
 ```bash
-bun run $PAI_DIR/skills/DoclingConverter/Tools/Convert.ts <file_path> [options]
+bun run $PAI_DIR/skills/docTOmd/Tools/Convert.ts <file_path> [options]
 ```
 
 **Options:**
@@ -53,8 +53,12 @@ User: "Convert report.pdf to markdown"
 -> bun run Convert.ts report.pdf
 -> Output: report.md + report-images/ directory
 
-User: "/docling document.docx"
+User: "/doctomd document.docx"
 -> bun run Convert.ts document.docx
+-> Output: document.md + document-images/ directory
+
+User: "Turn this PDF into md"
+-> bun run Convert.ts document.pdf
 -> Output: document.md + document-images/ directory
 
 User: "Convert scanned.pdf using OCR"

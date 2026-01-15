@@ -41,7 +41,7 @@ import type {
 // ============================================================================
 
 const HELP_TEXT = `
-DoclingConverter - Convert documents to markdown with page-organized images
+docTOmd - Convert documents to markdown with page-organized images
 
 USAGE:
   bun run Convert.ts <file_path> [options]

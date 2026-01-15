@@ -1,4 +1,4 @@
-# DoclingConverter Skill - Product Requirements Document
+# docTOmd Skill - Product Requirements Document
 
 **Version:** 5.0.0
 **Date:** 2026-01-14
@@ -26,7 +26,7 @@ When converting documents to markdown, users need:
 
 ## Solution Overview
 
-The `DoclingConverter` skill provides a streamlined command to convert any supported document into clean markdown with:
+The `docTOmd` skill provides a streamlined command to convert any supported document into clean markdown with:
 
 - Preserved document structure (tables, code, formulas, lists, hyperlinks)
 - Page-organized external images (scales to hundreds of images)
@@ -217,7 +217,7 @@ curl -fsSL https://bun.sh/install | bash
 ### Skill Structure
 
 ```
-DoclingConverter/
+docTOmd/
 ├── SKILL.md                      # Skill definition
 ├── VERSION                       # Version tracking
 ├── package.json                  # Dependencies
